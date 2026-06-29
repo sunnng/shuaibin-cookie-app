@@ -52,3 +52,7 @@ coverage
 .cache
 tmp
 temp
+
+# Local SQLite database and runtime data
+local.db
+data/

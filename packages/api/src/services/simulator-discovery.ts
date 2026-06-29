@@ -1,0 +1,316 @@
+import { db } from "@shuaibin-cookie-app/db";
+import { type Simulator, simulators } from "@shuaibin-cookie-app/db/schema";
+import { $ } from "bun";
+import { eq } from "drizzle-orm";
+
+export interface DiscoveredSimulator {
+	adbId: string;
+	adbPort: number;
+	brand: Simulator["brand"];
+	name: string;
+	resolution?: string;
+	status: "online" | "offline";
+}
+
+const LEIDIAN_DEFAULT = "C:\\Program Files\\LeiDian\\LDPlayer\\ldconsole.exe";
+const PORT_REGEX = /(\d+)/;
+const ADB_PORT_REGEX = /:(\d+)/;
+
+function getLeiDianConsole() {
+	return process.env.LEIDIAN_PATH || LEIDIAN_DEFAULT;
+}
+
+function getAdb() {
+	return process.env.ADB_PATH || "adb";
+}
+
+async function discoverLeiDian(): Promise<DiscoveredSimulator[]> {
+	const ldconsole = getLeiDianConsole();
+	const results: DiscoveredSimulator[] = [];
+
+	try {
+		const listOutput = await $`"${ldconsole}" list`.text();
+		const lines = listOutput.trim().split("\n").filter(Boolean);
+
+		for (const line of lines) {
+			const [index, name] = line.split(",");
+			if (!(index && name)) {
+				continue;
+			}
+
+			try {
+				const adbOutput = await $`"${ldconsole}" adb --index ${index}`.text();
+				const portMatch = adbOutput.match(PORT_REGEX);
+				const port = portMatch?.[1] ? Number.parseInt(portMatch[1], 10) : 5555;
+
+				results.push({
+					name: name.trim() || `LeiDian-${index}`,
+					brand: "leidian",
+					adbId: `emulator-${port}`,
+					adbPort: port,
+					status: "online",
+				});
+			} catch {
+				// Ignore individual emulator failures
+			}
+		}
+	} catch {
+		// LeiDian not installed or CLI not found
+	}
+
+	return results;
+}
+
+async function discoverMuMu(): Promise<DiscoveredSimulator[]> {
+	const results: DiscoveredSimulator[] = [];
+	const adb = getAdb();
+
+	for (let i = 0; i < 16; i++) {
+		const port = 7555 + i * 2;
+		const adbId = `127.0.0.1:${port}`;
+
+		try {
+			await $`"${adb}" -s ${adbId} shell echo ok`.quiet();
+			results.push({
+				name: `MuMu-${i}`,
+				brand: "mumu",
+				adbId,
+				adbPort: port,
+				status: "online",
+			});
+		} catch {
+			// Port not responding
+		}
+	}
+
+	return results;
+}
+
+async function discoverAdb(): Promise<DiscoveredSimulator[]> {
+	const adb = getAdb();
+	const results: DiscoveredSimulator[] = [];
+
+	try {
+		const output = await $`"${adb}" devices`.text();
+		const lines = output.trim().split("\n").slice(1);
+
+		for (const line of lines) {
+			const [adbId, state] = line.split("\t");
+			if (!adbId || state !== "device") {
+				continue;
+			}
+
+			const portMatch = adbId.match(ADB_PORT_REGEX);
+			const port = portMatch?.[1] ? Number.parseInt(portMatch[1], 10) : 5555;
+
+			results.push({
+				name: `Device-${adbId}`,
+				brand: "adb",
+				adbId,
+				adbPort: port,
+				status: "online",
+			});
+		}
+	} catch {
+		// adb not available
+	}
+
+	return results;
+}
+
+export async function discoverSimulators(): Promise<DiscoveredSimulator[]> {
+	const [leidian, mumu, adb] = await Promise.all([
+		discoverLeiDian(),
+		discoverMuMu(),
+		discoverAdb(),
+	]);
+
+	const map = new Map<string, DiscoveredSimulator>();
+
+	for (const sim of [...leidian, ...mumu, ...adb]) {
+		if (!map.has(sim.adbId)) {
+			map.set(sim.adbId, sim);
+		}
+	}
+
+	return Array.from(map.values());
+}
+
+export async function syncDiscoveredSimulators(): Promise<Simulator[]> {
+	const discovered = await discoverSimulators();
+	const synced: Simulator[] = [];
+	const now = new Date();
+
+	for (const sim of discovered) {
+		const existing = await db
+			.select()
+			.from(simulators)
+			.where(eq(simulators.adbId, sim.adbId))
+			.get();
+
+		if (existing) {
+			const [updated] = await db
+				.update(simulators)
+				.set({
+					name: sim.name,
+					brand: sim.brand,
+					adbPort: sim.adbPort,
+					status: sim.status,
+					lastSeen: now,
+				})
+				.where(eq(simulators.id, existing.id))
+				.returning();
+			if (updated) {
+				synced.push(updated);
+			}
+		} else {
+			const id = crypto.randomUUID();
+			const [created] = await db
+				.insert(simulators)
+				.values({
+					id,
+					name: sim.name,
+					brand: sim.brand,
+					adbId: sim.adbId,
+					adbPort: sim.adbPort,
+					status: sim.status,
+					createdAt: now,
+					lastSeen: now,
+				})
+				.returning();
+			if (created) {
+				synced.push(created);
+			}
+		}
+	}
+
+	return synced;
+}
+
+export async function launchSimulator(sim: Simulator): Promise<void> {
+	const ldconsole = getLeiDianConsole();
+	const adb = getAdb();
+
+	if (sim.brand === "leidian") {
+		try {
+			const listOutput = await $`"${ldconsole}" list`.text();
+			const lines = listOutput.trim().split("\n").filter(Boolean);
+
+			for (const line of lines) {
+				const [index, name] = line.split(",");
+				if (name?.trim() === sim.name || line.includes(sim.adbId)) {
+					await $`"${ldconsole}" launch --index ${index}`.quiet();
+					return;
+				}
+			}
+		} catch {
+			// Fallback to adb
+		}
+	}
+
+	try {
+		await $`"${adb}" connect ${sim.adbId}`.quiet();
+	} catch {
+		// Ignore
+	}
+}
+
+export async function shutdownSimulator(sim: Simulator): Promise<void> {
+	const ldconsole = getLeiDianConsole();
+	const adb = getAdb();
+
+	if (sim.brand === "leidian") {
+		try {
+			const listOutput = await $`"${ldconsole}" list`.text();
+			const lines = listOutput.trim().split("\n").filter(Boolean);
+
+			for (const line of lines) {
+				const [index, name] = line.split(",");
+				if (name?.trim() === sim.name || line.includes(sim.adbId)) {
+					await $`"${ldconsole}" quit --index ${index}`.quiet();
+					return;
+				}
+			}
+		} catch {
+			// Fallback to adb
+		}
+	}
+
+	try {
+		await $`"${adb}" -s ${sim.adbId} shell reboot -p`.quiet();
+	} catch {
+		// Ignore
+	}
+}
+
+export async function arrangeWindows(
+	layout: "grid" | "horizontal" | "vertical",
+	columns?: number
+): Promise<void> {
+	const onlineSims = await db
+		.select()
+		.from(simulators)
+		.where(eq(simulators.status, "online"))
+		.all();
+
+	if (onlineSims.length === 0) {
+		return;
+	}
+
+	const winW = 540;
+	const winH = 960;
+	const cols = columns || Math.ceil(Math.sqrt(onlineSims.length));
+
+	for (let i = 0; i < onlineSims.length; i++) {
+		const sim = onlineSims[i];
+		if (!sim) {
+			continue;
+		}
+		let x = 0;
+		let y = 0;
+
+		if (layout === "grid") {
+			const row = Math.floor(i / cols);
+			const col = i % cols;
+			x = col * winW;
+			y = row * winH;
+		} else if (layout === "horizontal") {
+			x = i * winW;
+			y = 0;
+		} else if (layout === "vertical") {
+			x = 0;
+			y = i * winH;
+		}
+
+		await positionWindow(sim, x, y, winW, winH);
+	}
+}
+
+async function positionWindow(
+	sim: Simulator,
+	x: number,
+	y: number,
+	w: number,
+	h: number
+): Promise<void> {
+	const ldconsole = getLeiDianConsole();
+
+	if (sim.brand === "leidian") {
+		try {
+			const listOutput = await $`"${ldconsole}" list`.text();
+			const lines = listOutput.trim().split("\n").filter(Boolean);
+
+			for (const line of lines) {
+				const [index, name] = line.split(",");
+				if (name?.trim() === sim.name || line.includes(sim.adbId)) {
+					await $`"${ldconsole}" modify --index ${index} --resolution ${w},${h} --dpi 240`.quiet();
+					return;
+				}
+			}
+		} catch {
+			// Ignore
+		}
+	}
+
+	console.log(`[arrange] ${sim.name} -> (${x}, ${y}) ${w}x${h}`);
+}

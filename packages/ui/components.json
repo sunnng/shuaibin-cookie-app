@@ -20,5 +20,7 @@
   },
   "menuColor": "default",
   "menuAccent": "subtle",
-  "registries": {}
+  "registries": {
+    "@7ovr": "https://7ovr.com/r/{name}.json"
+  }
 }

@@ -19,6 +19,7 @@
     "@shuaibin-cookie-app/env": "workspace:*",
     "@sinclair/typebox": "^0.34.49",
     "dotenv": "catalog:",
+    "drizzle-orm": "^0.45.1",
     "elysia": "catalog:",
     "zod": "catalog:"
   },
