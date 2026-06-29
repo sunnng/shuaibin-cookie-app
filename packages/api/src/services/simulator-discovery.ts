@@ -17,6 +17,7 @@ export interface DiscoveredSimulator {
 const LEIDIAN_CANDIDATES = [
 	"C:\\Program Files\\LeiDian\\LDPlayer\\ldconsole.exe",
 	"C:\\Program Files (x86)\\LeiDian\\LDPlayer\\ldconsole.exe",
+	"C:\\leidian\\LDPlayer9\\ldconsole.exe",
 	"C:\\leidian\\LDPlayer\\ldconsole.exe",
 ];
 
