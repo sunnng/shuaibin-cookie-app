@@ -2,16 +2,16 @@ import { db } from "@shuaibin-cookie-app/db";
 import { simulators, type Task, tasks } from "@shuaibin-cookie-app/db/schema";
 import { $ } from "bun";
 import { eq } from "drizzle-orm";
-
 import { findScriptByPackage } from "./script-store";
+import { getAdb } from "./simulator-discovery";
 import { sendCommand } from "./websocket-store";
 
-function getAdb() {
-	return process.env.ADB_PATH || "adb";
-}
-
 export async function installAndStart(task: Task): Promise<void> {
-	const adb = getAdb();
+	const adb = await getAdb();
+	if (!adb) {
+		throw new Error("adb not found; set ADB_PATH env var");
+	}
+
 	const sim = await db
 		.select()
 		.from(simulators)
@@ -44,7 +44,7 @@ export async function installAndStart(task: Task): Promise<void> {
 }
 
 export async function stopTask(task: Task): Promise<void> {
-	const adb = getAdb();
+	const adb = await getAdb();
 	const sim = await db
 		.select()
 		.from(simulators)
@@ -53,10 +53,12 @@ export async function stopTask(task: Task): Promise<void> {
 
 	if (sim) {
 		sendCommand(sim.id, "stop");
-		try {
-			await $`"${adb}" -s ${sim.adbId} shell am force-stop ${task.scriptPackage}`.quiet();
-		} catch {
-			// Ignore force-stop errors
+		if (adb) {
+			try {
+				await $`"${adb}" -s ${sim.adbId} shell am force-stop ${task.scriptPackage}`.quiet();
+			} catch {
+				// Ignore force-stop errors
+			}
 		}
 	}
 

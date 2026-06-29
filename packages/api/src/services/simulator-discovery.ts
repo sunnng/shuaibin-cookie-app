@@ -45,7 +45,7 @@ async function getLeiDianConsole(): Promise<string | undefined> {
 	return await findExisting(getLeiDianConsoleCandidates());
 }
 
-async function getAdb(): Promise<string | undefined> {
+export async function getAdb(): Promise<string | undefined> {
 	if (process.env.ADB_PATH) {
 		return process.env.ADB_PATH;
 	}
