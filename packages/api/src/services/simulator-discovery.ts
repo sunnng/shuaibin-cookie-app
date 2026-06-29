@@ -13,8 +13,9 @@ export interface DiscoveredSimulator {
 }
 
 const LEIDIAN_DEFAULT = "C:\\Program Files\\LeiDian\\LDPlayer\\ldconsole.exe";
-const PORT_REGEX = /(\d+)/;
 const ADB_PORT_REGEX = /:(\d+)/;
+const EMULATOR_PORT_REGEX = /emulator-(\d+)/;
+const ANY_PORT_REGEX = /(\d{4,5})/;
 
 function getLeiDianConsole() {
 	return process.env.LEIDIAN_PATH || LEIDIAN_DEFAULT;
@@ -24,12 +25,46 @@ function getAdb() {
 	return process.env.ADB_PATH || "adb";
 }
 
+function extractPort(output: string): number {
+	const adbMatch = output.match(ADB_PORT_REGEX);
+	if (adbMatch?.[1]) {
+		return Number.parseInt(adbMatch[1], 10);
+	}
+
+	const emulatorMatch = output.match(EMULATOR_PORT_REGEX);
+	if (emulatorMatch?.[1]) {
+		return Number.parseInt(emulatorMatch[1], 10);
+	}
+
+	const anyMatch = output.match(ANY_PORT_REGEX);
+	if (anyMatch?.[1]) {
+		return Number.parseInt(anyMatch[1], 10);
+	}
+
+	return 5555;
+}
+
+async function isLeiDianRunning(
+	index: string,
+	ldconsole: string
+): Promise<boolean> {
+	try {
+		const output = await $`"${ldconsole}" isrunning --index ${index}`.text();
+		return output.trim().toLowerCase().includes("running");
+	} catch {
+		// If isrunning is not supported, assume running
+		return true;
+	}
+}
+
 async function discoverLeiDian(): Promise<DiscoveredSimulator[]> {
 	const ldconsole = getLeiDianConsole();
 	const results: DiscoveredSimulator[] = [];
 
 	try {
+		console.log(`[discover] LeiDian console: ${ldconsole}`);
 		const listOutput = await $`"${ldconsole}" list`.text();
+		console.log(`[discover] LeiDian list output:\n${listOutput}`);
 		const lines = listOutput.trim().split("\n").filter(Boolean);
 
 		for (const line of lines) {
@@ -39,23 +74,31 @@ async function discoverLeiDian(): Promise<DiscoveredSimulator[]> {
 			}
 
 			try {
+				const running = await isLeiDianRunning(index, ldconsole);
+				console.log(`[discover] LeiDian index=${index} running=${running}`);
+				if (!running) {
+					continue;
+				}
+
 				const adbOutput = await $`"${ldconsole}" adb --index ${index}`.text();
-				const portMatch = adbOutput.match(PORT_REGEX);
-				const port = portMatch?.[1] ? Number.parseInt(portMatch[1], 10) : 5555;
+				console.log(
+					`[discover] LeiDian adb --index ${index} output:\n${adbOutput}`
+				);
+				const port = extractPort(adbOutput);
 
 				results.push({
 					name: name.trim() || `LeiDian-${index}`,
 					brand: "leidian",
-					adbId: `emulator-${port}`,
+					adbId: `127.0.0.1:${port}`,
 					adbPort: port,
 					status: "online",
 				});
-			} catch {
-				// Ignore individual emulator failures
+			} catch (error) {
+				console.log(`[discover] LeiDian index=${index} failed:`, error);
 			}
 		}
-	} catch {
-		// LeiDian not installed or CLI not found
+	} catch (error) {
+		console.log("[discover] LeiDian not found or CLI error:", error);
 	}
 
 	return results;
@@ -91,7 +134,9 @@ async function discoverAdb(): Promise<DiscoveredSimulator[]> {
 	const results: DiscoveredSimulator[] = [];
 
 	try {
+		console.log(`[discover] adb: ${adb}`);
 		const output = await $`"${adb}" devices`.text();
+		console.log(`[discover] adb devices output:\n${output}`);
 		const lines = output.trim().split("\n").slice(1);
 
 		for (const line of lines) {
@@ -100,8 +145,7 @@ async function discoverAdb(): Promise<DiscoveredSimulator[]> {
 				continue;
 			}
 
-			const portMatch = adbId.match(ADB_PORT_REGEX);
-			const port = portMatch?.[1] ? Number.parseInt(portMatch[1], 10) : 5555;
+			const port = extractPort(adbId);
 
 			results.push({
 				name: `Device-${adbId}`,
@@ -111,8 +155,8 @@ async function discoverAdb(): Promise<DiscoveredSimulator[]> {
 				status: "online",
 			});
 		}
-	} catch {
-		// adb not available
+	} catch (error) {
+		console.log("[discover] adb not available:", error);
 	}
 
 	return results;
