@@ -19,6 +19,7 @@
     "hooks": "@/hooks"
   },
   "menuColor": "default",
-  "menuAccent": "subtle",
+  "menuAccent": "bold",
+  "rtl": false,
   "registries": {}
 }

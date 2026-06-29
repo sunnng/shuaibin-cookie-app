@@ -1,14 +1,14 @@
 import type { Context as ElysiaContext } from "elysia";
 
-export type CreateContextOptions = {
-  context: ElysiaContext;
-};
-
-export async function createContext(_options: CreateContextOptions) {
-  return {
-    auth: null,
-    session: null,
-  };
+export interface CreateContextOptions {
+	context: ElysiaContext;
 }
 
-export type Context = Awaited<ReturnType<typeof createContext>>;
+export function createContext(_options: CreateContextOptions) {
+	return {
+		auth: null,
+		session: null,
+	};
+}
+
+export type Context = ReturnType<typeof createContext>;
