@@ -23,19 +23,39 @@ export async function installAndStart(task: Task): Promise<void> {
 	}
 
 	const script = await findScriptByPackage(task.scriptPackage);
-
-	if (script) {
-		try {
-			await $`"${adb}" -s ${sim.adbId} install -r ${script.filePath}`.quiet();
-		} catch {
-			// APK may already be installed with same signature
-		}
+	if (!script) {
+		throw new Error("Script APK not found");
 	}
+
+	console.log(`[task:${task.id}] install ${script.filePath} -> ${sim.adbId}`);
+	try {
+		const installOutput =
+			await $`"${adb}" -s ${sim.adbId} install -r ${script.filePath}`.text();
+		console.log(`[task:${task.id}] install output:`, installOutput);
+	} catch (error) {
+		console.log(
+			`[task:${task.id}] install failed (may already be installed):`,
+			error
+		);
+	}
+
+	const mainActivity = script.mainActivity || ".MainActivity";
+	const componentName = mainActivity.startsWith(".")
+		? `${task.scriptPackage}${mainActivity}`
+		: mainActivity;
 
 	const wsHost = process.env.SERVER_HOST || "localhost";
 	const wsAddress = `ws://${wsHost}:3000/ws/script`;
 
-	await $`"${adb}" -s ${sim.adbId} shell am start -n ${task.scriptPackage}/.MainActivity --es ws_address ${wsAddress} --es device_id ${sim.id}`.quiet();
+	console.log(`[task:${task.id}] start ${componentName} on ${sim.adbId}`);
+	try {
+		const startOutput =
+			await $`"${adb}" -s ${sim.adbId} shell am start -n ${componentName} --es ws_address ${wsAddress} --es device_id ${sim.id}`.text();
+		console.log(`[task:${task.id}] start output:`, startOutput);
+	} catch (error) {
+		console.log(`[task:${task.id}] start failed:`, error);
+		throw new Error(`Failed to start APK: ${componentName}`);
+	}
 
 	await db
 		.update(tasks)

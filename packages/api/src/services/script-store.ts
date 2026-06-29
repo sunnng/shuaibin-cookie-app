@@ -14,6 +14,7 @@ export interface ScriptMeta {
 	fileName: string;
 	filePath: string;
 	id: string;
+	mainActivity?: string;
 	packageName: string;
 	uploadedAt: string;
 	versionName?: string;

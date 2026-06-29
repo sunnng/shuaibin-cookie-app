@@ -246,6 +246,7 @@ new Elysia()
 			fileName: file.name,
 			packageName: info.packageName,
 			versionName: info.versionName,
+			mainActivity: info.mainActivity,
 			uploadedAt: new Date().toISOString(),
 			filePath,
 		});

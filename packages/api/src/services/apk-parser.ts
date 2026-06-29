@@ -4,8 +4,11 @@ import { $ } from "bun";
 declare const Bun: typeof import("bun");
 
 const AAPT_PACKAGE_REGEX = /package: name='([^']+)'.*versionName='([^']*)'/;
+const AAPT_ACTIVITY_REGEX = /launchable-activity: name='([^']+)'/;
+const ACTIVITY_NAME_REGEX = /\w+Activity$/;
 
 export interface ApkInfo {
+	mainActivity?: string;
 	packageName: string;
 	versionName?: string;
 }
@@ -27,9 +30,12 @@ async function parseWithAapt(apkPath: string): Promise<ApkInfo> {
 		throw new Error("aapt output did not contain package info");
 	}
 
+	const activityMatch = output.match(AAPT_ACTIVITY_REGEX);
+
 	return {
 		packageName: packageMatch[1] ?? "unknown",
 		versionName: packageMatch[2] || undefined,
+		mainActivity: activityMatch?.[1] || undefined,
 	};
 }
 
@@ -50,6 +56,7 @@ function parseAxml(buffer: Buffer): ApkInfo {
 	let strings: string[] = [];
 	let packageName = "unknown";
 	let versionName: string | undefined;
+	let mainActivity: string | undefined;
 
 	while (offset < buffer.length) {
 		const chunkType = buffer.readUInt16LE(offset);
@@ -57,6 +64,7 @@ function parseAxml(buffer: Buffer): ApkInfo {
 
 		if (chunkType === 0x00_01) {
 			strings = parseStringPool(buffer, offset);
+			mainActivity ??= strings.find((s) => ACTIVITY_NAME_REGEX.test(s));
 		} else if (chunkType === 0x01_02 || chunkType === 0x00_1c) {
 			const attrCount = buffer.readUInt16LE(offset + 28);
 			const attrStart = offset + 36;
@@ -81,7 +89,7 @@ function parseAxml(buffer: Buffer): ApkInfo {
 		}
 	}
 
-	return { packageName, versionName };
+	return { packageName, versionName, mainActivity };
 }
 
 function parseStringPool(buffer: Buffer, start: number): string[] {
