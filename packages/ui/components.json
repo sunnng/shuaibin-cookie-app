@@ -1,0 +1,24 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "base-lyra",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/styles/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@shuaibin-cookie-app/ui/components",
+    "utils": "@shuaibin-cookie-app/ui/lib/utils",
+    "hooks": "@shuaibin-cookie-app/ui/hooks",
+    "lib": "@shuaibin-cookie-app/ui/lib",
+    "ui": "@shuaibin-cookie-app/ui/components"
+  },
+  "menuColor": "default",
+  "menuAccent": "subtle",
+  "registries": {}
+}

@@ -1,0 +1,31 @@
+{
+  "name": "server",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsdown",
+    "check-types": "tsc -b",
+    "compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run dist/index.mjs"
+  },
+  "dependencies": {
+    "@elysiajs/cors": "^1.4.1",
+    "@orpc/openapi": "catalog:",
+    "@orpc/server": "catalog:",
+    "@orpc/zod": "catalog:",
+    "@shuaibin-cookie-app/api": "workspace:*",
+    "@shuaibin-cookie-app/db": "workspace:*",
+    "@shuaibin-cookie-app/env": "workspace:*",
+    "@sinclair/typebox": "^0.34.49",
+    "dotenv": "catalog:",
+    "elysia": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@shuaibin-cookie-app/config": "workspace:*",
+    "@types/bun": "catalog:",
+    "tsdown": "^0.21.9",
+    "typescript": "catalog:"
+  }
+}
