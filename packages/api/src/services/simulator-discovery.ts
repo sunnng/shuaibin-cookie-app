@@ -3,6 +3,8 @@ import { type Simulator, simulators } from "@shuaibin-cookie-app/db/schema";
 import { $ } from "bun";
 import { eq } from "drizzle-orm";
 
+declare const Bun: typeof import("bun");
+
 export interface DiscoveredSimulator {
 	adbId: string;
 	adbPort: number;
@@ -12,17 +14,56 @@ export interface DiscoveredSimulator {
 	status: "online" | "offline";
 }
 
-const LEIDIAN_DEFAULT = "C:\\Program Files\\LeiDian\\LDPlayer\\ldconsole.exe";
+const LEIDIAN_CANDIDATES = [
+	"C:\\Program Files\\LeiDian\\LDPlayer\\ldconsole.exe",
+	"C:\\Program Files (x86)\\LeiDian\\LDPlayer\\ldconsole.exe",
+	"C:\\leidian\\LDPlayer\\ldconsole.exe",
+];
+
 const ADB_PORT_REGEX = /:(\d+)/;
 const EMULATOR_PORT_REGEX = /emulator-(\d+)/;
 const ANY_PORT_REGEX = /(\d{4,5})/;
 
-function getLeiDianConsole() {
-	return process.env.LEIDIAN_PATH || LEIDIAN_DEFAULT;
+async function findExisting(paths: string[]): Promise<string | undefined> {
+	for (const path of paths) {
+		if (await Bun.file(path).exists()) {
+			return path;
+		}
+	}
+	return;
 }
 
-function getAdb() {
-	return process.env.ADB_PATH || "adb";
+function getLeiDianConsoleCandidates(): string[] {
+	if (process.env.LEIDIAN_PATH) {
+		return [process.env.LEIDIAN_PATH, ...LEIDIAN_CANDIDATES];
+	}
+	return LEIDIAN_CANDIDATES;
+}
+
+async function getLeiDianConsole(): Promise<string> {
+	return (
+		(await findExisting(getLeiDianConsoleCandidates())) ?? LEIDIAN_CANDIDATES[0]
+	);
+}
+
+async function getAdb(): Promise<string> {
+	if (process.env.ADB_PATH) {
+		return process.env.ADB_PATH;
+	}
+
+	const userHome =
+		process.env.USERPROFILE || `C:\\Users\\${process.env.USERNAME ?? "User"}`;
+	const candidates = [
+		"adb",
+		// Bundled adb inside LeiDian installation
+		...(await getLeiDianConsoleCandidates()).map((ldconsole) =>
+			ldconsole.replace("ldconsole.exe", "adb.exe")
+		),
+		// Android SDK default location
+		`${userHome}\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe`,
+	];
+
+	return (await findExisting(candidates)) ?? "adb";
 }
 
 function extractPort(output: string): number {
@@ -58,7 +99,7 @@ async function isLeiDianRunning(
 }
 
 async function discoverLeiDian(): Promise<DiscoveredSimulator[]> {
-	const ldconsole = getLeiDianConsole();
+	const ldconsole = await getLeiDianConsole();
 	const results: DiscoveredSimulator[] = [];
 
 	try {
@@ -106,7 +147,7 @@ async function discoverLeiDian(): Promise<DiscoveredSimulator[]> {
 
 async function discoverMuMu(): Promise<DiscoveredSimulator[]> {
 	const results: DiscoveredSimulator[] = [];
-	const adb = getAdb();
+	const adb = await getAdb();
 
 	for (let i = 0; i < 16; i++) {
 		const port = 7555 + i * 2;
@@ -130,7 +171,7 @@ async function discoverMuMu(): Promise<DiscoveredSimulator[]> {
 }
 
 async function discoverAdb(): Promise<DiscoveredSimulator[]> {
-	const adb = getAdb();
+	const adb = await getAdb();
 	const results: DiscoveredSimulator[] = [];
 
 	try {
@@ -232,8 +273,8 @@ export async function syncDiscoveredSimulators(): Promise<Simulator[]> {
 }
 
 export async function launchSimulator(sim: Simulator): Promise<void> {
-	const ldconsole = getLeiDianConsole();
-	const adb = getAdb();
+	const ldconsole = await getLeiDianConsole();
+	const adb = await getAdb();
 
 	if (sim.brand === "leidian") {
 		try {
@@ -260,8 +301,8 @@ export async function launchSimulator(sim: Simulator): Promise<void> {
 }
 
 export async function shutdownSimulator(sim: Simulator): Promise<void> {
-	const ldconsole = getLeiDianConsole();
-	const adb = getAdb();
+	const ldconsole = await getLeiDianConsole();
+	const adb = await getAdb();
 
 	if (sim.brand === "leidian") {
 		try {
@@ -337,7 +378,7 @@ async function positionWindow(
 	w: number,
 	h: number
 ): Promise<void> {
-	const ldconsole = getLeiDianConsole();
+	const ldconsole = await getLeiDianConsole();
 
 	if (sim.brand === "leidian") {
 		try {
