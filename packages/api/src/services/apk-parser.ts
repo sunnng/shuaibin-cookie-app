@@ -1,3 +1,5 @@
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { BunFile } from "bun";
 import { $ } from "bun";
 
@@ -6,6 +8,35 @@ declare const Bun: typeof import("bun");
 const AAPT_PACKAGE_REGEX = /package: name='([^']+)'.*versionName='([^']*)'/;
 const AAPT_ACTIVITY_REGEX = /launchable-activity: name='([^']+)'/;
 const ACTIVITY_NAME_REGEX = /\w+Activity$/;
+
+async function findAaptPath(): Promise<string | undefined> {
+	if (process.env.AAPT_PATH) {
+		return process.env.AAPT_PATH;
+	}
+
+	const userHome =
+		process.env.USERPROFILE || `C:\\Users\\${process.env.USERNAME ?? "User"}`;
+	const buildToolsDir = `${userHome}\\AppData\\Local\\Android\\Sdk\\build-tools`;
+
+	try {
+		const entries = await readdir(buildToolsDir, { withFileTypes: true });
+		const versions = entries
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name)
+			.sort();
+
+		for (const version of versions.reverse()) {
+			const candidate = join(buildToolsDir, version, "aapt.exe");
+			if (await Bun.file(candidate).exists()) {
+				return candidate;
+			}
+		}
+	} catch {
+		// Android SDK not found
+	}
+
+	return;
+}
 
 export interface ApkInfo {
 	mainActivity?: string;
@@ -22,7 +53,7 @@ export async function parseApkInfo(apkPath: string): Promise<ApkInfo> {
 }
 
 async function parseWithAapt(apkPath: string): Promise<ApkInfo> {
-	const aapt = process.env.AAPT_PATH || "aapt";
+	const aapt = (await findAaptPath()) ?? "aapt";
 	const output = await $`"${aapt}" dump badging ${apkPath}`.text();
 
 	const packageMatch = output.match(AAPT_PACKAGE_REGEX);
@@ -65,9 +96,9 @@ function parseAxml(buffer: Buffer): ApkInfo {
 		if (chunkType === 0x00_01) {
 			strings = parseStringPool(buffer, offset);
 			mainActivity ??= strings.find((s) => ACTIVITY_NAME_REGEX.test(s));
-		} else if (chunkType === 0x01_02 || chunkType === 0x00_1c) {
+		} else if (chunkType === 0x01_02) {
 			const attrCount = buffer.readUInt16LE(offset + 28);
-			const attrStart = offset + 36;
+			const attrStart = offset + 32;
 
 			for (let i = 0; i < attrCount; i++) {
 				const attrOffset = attrStart + i * 20;
