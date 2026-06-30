@@ -2,12 +2,10 @@ import { db } from "@shuaibin-cookie-app/db";
 import { simulators } from "@shuaibin-cookie-app/db/schema";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-
 import { publicProcedure } from "../index";
+import { getClientStatus } from "../services/client-monitor";
 import {
 	arrangeWindows,
-	launchSimulator,
-	shutdownSimulator,
 	syncDiscoveredSimulators,
 } from "../services/simulator-discovery";
 
@@ -18,43 +16,22 @@ const arrangeSchema = z.object({
 });
 
 export const simulatorRouter = {
-	list: publicProcedure.handler(async () => db.select().from(simulators).all()),
+	list: publicProcedure.handler(async () => {
+		const rows = await db.select().from(simulators).all();
+		return rows.map((sim) => {
+			const status = getClientStatus(sim.id);
+			return {
+				...sim,
+				clientRunning: status?.running ?? false,
+				clientCheckedAt: status?.checkedAt ?? null,
+			};
+		});
+	}),
 
-	discover: publicProcedure.handler(async () => syncDiscoveredSimulators()),
-
-	launch: publicProcedure
-		.input(simulatorIdSchema)
-		.handler(async ({ input }) => {
-			const sim = await db
-				.select()
-				.from(simulators)
-				.where(eq(simulators.id, input.id))
-				.get();
-
-			if (!sim) {
-				throw new Error("Simulator not found");
-			}
-
-			await launchSimulator(sim);
-			return { success: true };
-		}),
-
-	shutdown: publicProcedure
-		.input(simulatorIdSchema)
-		.handler(async ({ input }) => {
-			const sim = await db
-				.select()
-				.from(simulators)
-				.where(eq(simulators.id, input.id))
-				.get();
-
-			if (!sim) {
-				throw new Error("Simulator not found");
-			}
-
-			await shutdownSimulator(sim);
-			return { success: true };
-		}),
+	discover: publicProcedure.handler(async () => {
+		const synced = await syncDiscoveredSimulators();
+		return { success: true, count: synced.length, simulators: synced };
+	}),
 
 	delete: publicProcedure
 		.input(simulatorIdSchema)

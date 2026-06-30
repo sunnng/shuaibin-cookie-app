@@ -28,13 +28,20 @@ export function getScriptFilePath(id: string): string {
 	return join(DATA_DIR, `${id}.apk`);
 }
 
+function resolveScriptMeta(meta: ScriptMeta): ScriptMeta {
+	return {
+		...meta,
+		filePath: getScriptFilePath(meta.id),
+	};
+}
+
 export async function loadScripts(): Promise<ScriptMeta[]> {
 	if (!(await existsAsync(META_FILE))) {
 		return [];
 	}
 
 	const data = await readFile(META_FILE, "utf-8");
-	return JSON.parse(data) as ScriptMeta[];
+	return (JSON.parse(data) as ScriptMeta[]).map(resolveScriptMeta);
 }
 
 export async function saveScripts(scripts: ScriptMeta[]): Promise<void> {
@@ -79,7 +86,7 @@ export async function deleteScript(
 	await saveScripts(scripts);
 
 	try {
-		await Bun.file(script.filePath).delete();
+		await Bun.file(getScriptFilePath(script.id)).delete();
 	} catch {
 		// Ignore file deletion errors
 	}

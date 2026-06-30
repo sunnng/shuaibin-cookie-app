@@ -1,7 +1,28 @@
 import { db } from "@shuaibin-cookie-app/db";
 import { type Simulator, simulators } from "@shuaibin-cookie-app/db/schema";
 import { $ } from "bun";
-import { eq } from "drizzle-orm";
+import { eq, notInArray } from "drizzle-orm";
+import { getServerPort } from "./server-config";
+
+async function execText(exe: string, args: string[]): Promise<string> {
+	const proc = Bun.spawn([exe, ...args], { stdout: "pipe", stderr: "pipe" });
+	const buffer = await new Response(proc.stdout).arrayBuffer();
+	await proc.exited;
+
+	if (process.platform === "win32") {
+		try {
+			return new TextDecoder("gbk").decode(buffer);
+		} catch {
+			// Fall back to UTF-8 when GBK is unavailable.
+		}
+	}
+
+	return new TextDecoder().decode(buffer);
+}
+
+function getLeiDianAdbPort(index: string): number {
+	return 5555 + Number.parseInt(index, 10) * 2;
+}
 
 declare const Bun: typeof import("bun");
 
@@ -84,17 +105,140 @@ function extractPort(output: string): number {
 	return 5555;
 }
 
+function getLeiDianEmulatorSerial(connectPort: number): string {
+	return `emulator-${connectPort - 1}`;
+}
+
+function isLeiDianAdbAlias(
+	adbId: string,
+	leidianConnectPorts: Set<number>
+): boolean {
+	if (adbId.startsWith("127.0.0.1:")) {
+		const port = Number.parseInt(adbId.split(":")[1] ?? "", 10);
+		return leidianConnectPorts.has(port);
+	}
+
+	if (adbId.startsWith("emulator-")) {
+		const emuPort = Number.parseInt(adbId.replace("emulator-", ""), 10);
+		for (const connectPort of leidianConnectPorts) {
+			if (emuPort === connectPort - 1) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+async function connectAdbEndpoint(adbId: string): Promise<void> {
+	const adb = await getAdb();
+	if (!adb || !adbId.includes(":")) {
+		return;
+	}
+
+	try {
+		await $`"${adb}" connect ${adbId}`.quiet();
+	} catch {
+		// Ignore connect errors; reachability check decides final status.
+	}
+}
+
+async function resolveLeiDianReachability(
+	connectPort: number
+): Promise<boolean> {
+	const adb = await getAdb();
+	if (!adb) {
+		return false;
+	}
+
+	const adbId = `127.0.0.1:${connectPort}`;
+	await connectAdbEndpoint(adbId);
+	if (await isAdbReachable(adbId)) {
+		return true;
+	}
+
+	const emulatorSerial = getLeiDianEmulatorSerial(connectPort);
+	return await isAdbReachable(emulatorSerial);
+}
+
+async function isAdbReachable(adbId: string): Promise<boolean> {
+	const adb = await getAdb();
+	if (!adb) {
+		return false;
+	}
+	try {
+		await $`"${adb}" -s ${adbId} shell echo ok`.quiet();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function isLeiDianRunning(
 	index: string,
 	ldconsole: string
 ): Promise<boolean> {
 	try {
-		const output = await $`"${ldconsole}" isrunning --index ${index}`.text();
-		return output.trim().toLowerCase().includes("running");
+		const output = await execText(ldconsole, [
+			"isrunning",
+			"--index",
+			index,
+		]);
+		const text = output.trim().toLowerCase();
+		if (
+			text === "0" ||
+			text === "false" ||
+			text.includes("not running") ||
+			text.includes("stopped") ||
+			text.includes("stop")
+		) {
+			return false;
+		}
+		if (text === "1" || text === "true" || text === "running") {
+			return true;
+		}
+		return false;
 	} catch {
-		// If isrunning is not supported, assume running
-		return true;
+		return false;
 	}
+}
+
+function parseLeiDianListLine(
+	line: string
+): { index: string; name: string } | null {
+	const trimmed = line.trim();
+	if (!/^\d+,/.test(trimmed)) {
+		return null;
+	}
+
+	const commaIdx = trimmed.indexOf(",");
+	const index = trimmed.slice(0, commaIdx).trim();
+	const rest = trimmed.slice(commaIdx + 1);
+	const nameEnd = rest.indexOf(",");
+	const name = (nameEnd === -1 ? rest : rest.slice(0, nameEnd)).trim();
+
+	if (!(index && name)) {
+		return null;
+	}
+
+	return { index, name };
+}
+
+async function getLeiDianListOutput(ldconsole: string): Promise<string> {
+	try {
+		const list2Output = await execText(ldconsole, ["list2"]);
+		const hasValidEntry = list2Output
+			.trim()
+			.split("\n")
+			.some((line) => parseLeiDianListLine(line) !== null);
+		if (hasValidEntry) {
+			return list2Output;
+		}
+	} catch {
+		// LDPlayer 9+ uses list2; fall back to legacy list output.
+	}
+
+	return await execText(ldconsole, ["list"]);
 }
 
 async function discoverLeiDian(): Promise<DiscoveredSimulator[]> {
@@ -110,33 +254,38 @@ async function discoverLeiDian(): Promise<DiscoveredSimulator[]> {
 
 	try {
 		console.log(`[discover] LeiDian console: ${ldconsole}`);
-		const listOutput = await $`"${ldconsole}" list`.text();
+		const listOutput = await getLeiDianListOutput(ldconsole);
 		console.log(`[discover] LeiDian list output:\n${listOutput}`);
 		const lines = listOutput.trim().split("\n").filter(Boolean);
 
 		for (const line of lines) {
-			const [index, name] = line.split(",");
-			if (!(index && name)) {
+			const parsed = parseLeiDianListLine(line);
+			if (!parsed) {
 				continue;
 			}
+			const { index, name } = parsed;
 
 			try {
+				const port = getLeiDianAdbPort(index);
+				const adbId = `127.0.0.1:${port}`;
 				const running = await isLeiDianRunning(index, ldconsole);
-				console.log(`[discover] LeiDian index=${index} running=${running}`);
 				if (!running) {
+					console.log(`[discover] LeiDian index=${index} not running, skip`);
 					continue;
 				}
 
-				const adbOutput = await $`"${ldconsole}" adb --index ${index}`.text();
+				const reachable = await resolveLeiDianReachability(port);
 				console.log(
-					`[discover] LeiDian adb --index ${index} output:\n${adbOutput}`
+					`[discover] LeiDian index=${index} running=${running} reachable=${reachable}`
 				);
-				const port = extractPort(adbOutput);
+				if (!reachable) {
+					continue;
+				}
 
 				results.push({
 					name: name.trim() || `LeiDian-${index}`,
 					brand: "leidian",
-					adbId: `127.0.0.1:${port}`,
+					adbId,
 					adbPort: port,
 					status: "online",
 				});
@@ -164,8 +313,8 @@ async function discoverMuMu(): Promise<DiscoveredSimulator[]> {
 		const port = 7555 + i * 2;
 		const adbId = `127.0.0.1:${port}`;
 
-		try {
-			await $`"${adb}" -s ${adbId} shell echo ok`.quiet();
+		await connectAdbEndpoint(adbId);
+		if (await isAdbReachable(adbId)) {
 			results.push({
 				name: `MuMu-${i}`,
 				brand: "mumu",
@@ -173,15 +322,15 @@ async function discoverMuMu(): Promise<DiscoveredSimulator[]> {
 				adbPort: port,
 				status: "online",
 			});
-		} catch {
-			// Port not responding
 		}
 	}
 
 	return results;
 }
 
-async function discoverAdb(): Promise<DiscoveredSimulator[]> {
+async function discoverAdb(
+	leidianConnectPorts: Set<number> = new Set()
+): Promise<DiscoveredSimulator[]> {
 	const adb = await getAdb();
 	const results: DiscoveredSimulator[] = [];
 
@@ -199,6 +348,15 @@ async function discoverAdb(): Promise<DiscoveredSimulator[]> {
 		for (const line of lines) {
 			const [adbId, state] = line.split("\t");
 			if (!adbId || state !== "device") {
+				continue;
+			}
+
+			if (isLeiDianAdbAlias(adbId, leidianConnectPorts)) {
+				console.log(`[discover] skip adb alias for LeiDian: ${adbId}`);
+				continue;
+			}
+
+			if (!(await isAdbReachable(adbId))) {
 				continue;
 			}
 
@@ -220,16 +378,23 @@ async function discoverAdb(): Promise<DiscoveredSimulator[]> {
 }
 
 export async function discoverSimulators(): Promise<DiscoveredSimulator[]> {
-	const [leidian, mumu, adb] = await Promise.all([
-		discoverLeiDian(),
+	const leidian = await discoverLeiDian();
+	const leidianConnectPorts = new Set(leidian.map((sim) => sim.adbPort));
+
+	const [mumu, adb] = await Promise.all([
 		discoverMuMu(),
-		discoverAdb(),
+		discoverAdb(leidianConnectPorts),
 	]);
 
 	const map = new Map<string, DiscoveredSimulator>();
 
 	for (const sim of [...leidian, ...mumu, ...adb]) {
-		if (!map.has(sim.adbId)) {
+		const existing = map.get(sim.adbId);
+		if (!existing) {
+			map.set(sim.adbId, sim);
+			continue;
+		}
+		if (sim.status === "online" && existing.status === "offline") {
 			map.set(sim.adbId, sim);
 		}
 	}
@@ -237,115 +402,215 @@ export async function discoverSimulators(): Promise<DiscoveredSimulator[]> {
 	return Array.from(map.values());
 }
 
+export async function setupAdbReverse(adbId: string): Promise<void> {
+	const adb = await getAdb();
+	if (!adb) {
+		console.log("[adb] adb not found; skip reverse for", adbId);
+		return;
+	}
+	try {
+		const port = getServerPort();
+		await $`"${adb}" -s ${adbId} reverse tcp:${port} tcp:${port}`.quiet();
+		console.log(`[adb] reverse tcp:${port} set for`, adbId);
+	} catch {
+		console.log(`[adb] reverse tcp:${getServerPort()} failed for`, adbId);
+	}
+}
+
+export async function getEmulatorAndroidId(
+	adbId: string
+): Promise<string | undefined> {
+	const adb = await getAdb();
+	if (!adb) {
+		return;
+	}
+	try {
+		const output =
+			await $`"${adb}" -s ${adbId} shell settings get secure android_id`.text();
+		const id = output.trim();
+		return id && id !== "null" ? id : undefined;
+	} catch {
+		return;
+	}
+}
+
+async function tryUpdateSimulator(
+	existingId: string,
+	sim: DiscoveredSimulator,
+	androidId: string | undefined,
+	now: Date
+): Promise<Simulator | undefined> {
+	const set: Partial<typeof simulators.$inferInsert> = {
+		name: sim.name,
+		brand: sim.brand,
+		adbPort: sim.adbPort,
+		status: sim.status,
+		lastSeen: now,
+	};
+	if (androidId) {
+		set.androidId = androidId;
+	}
+
+	try {
+		const [updated] = await db
+			.update(simulators)
+			.set(set)
+			.where(eq(simulators.id, existingId))
+			.returning();
+		return updated;
+	} catch (error) {
+		console.log(`[discover] update androidId for ${sim.adbId} failed:`, error);
+		const [updated] = await db
+			.update(simulators)
+			.set({
+				name: sim.name,
+				brand: sim.brand,
+				adbPort: sim.adbPort,
+				status: sim.status,
+				lastSeen: now,
+			})
+			.where(eq(simulators.id, existingId))
+			.returning();
+		return updated;
+	}
+}
+
+async function tryCreateSimulator(
+	sim: DiscoveredSimulator,
+	androidId: string | undefined,
+	now: Date
+): Promise<Simulator | undefined> {
+	const id = crypto.randomUUID();
+	const values: typeof simulators.$inferInsert = {
+		id,
+		name: sim.name,
+		brand: sim.brand,
+		adbId: sim.adbId,
+		adbPort: sim.adbPort,
+		status: sim.status,
+		createdAt: now,
+		lastSeen: now,
+	};
+	if (androidId) {
+		values.androidId = androidId;
+	}
+
+	try {
+		const [created] = await db.insert(simulators).values(values).returning();
+		return created;
+	} catch (error) {
+		console.log(
+			`[discover] insert simulator ${sim.adbId} with androidId failed:`,
+			error
+		);
+		const [created] = await db
+			.insert(simulators)
+			.values({
+				id,
+				name: sim.name,
+				brand: sim.brand,
+				adbId: sim.adbId,
+				adbPort: sim.adbPort,
+				status: sim.status,
+				createdAt: now,
+				lastSeen: now,
+			})
+			.returning();
+		return created;
+	}
+}
+
 export async function syncDiscoveredSimulators(): Promise<Simulator[]> {
 	const discovered = await discoverSimulators();
 	const synced: Simulator[] = [];
 	const now = new Date();
+	const discoveredAdbIds = discovered.map((sim) => sim.adbId);
 
 	for (const sim of discovered) {
+		const androidId =
+			sim.status === "online"
+				? await getEmulatorAndroidId(sim.adbId)
+				: undefined;
 		const existing = await db
 			.select()
 			.from(simulators)
 			.where(eq(simulators.adbId, sim.adbId))
 			.get();
 
-		if (existing) {
-			const [updated] = await db
-				.update(simulators)
-				.set({
-					name: sim.name,
-					brand: sim.brand,
-					adbPort: sim.adbPort,
-					status: sim.status,
-					lastSeen: now,
-				})
-				.where(eq(simulators.id, existing.id))
-				.returning();
-			if (updated) {
-				synced.push(updated);
-			}
-		} else {
-			const id = crypto.randomUUID();
-			const [created] = await db
-				.insert(simulators)
-				.values({
-					id,
-					name: sim.name,
-					brand: sim.brand,
-					adbId: sim.adbId,
-					adbPort: sim.adbPort,
-					status: sim.status,
-					createdAt: now,
-					lastSeen: now,
-				})
-				.returning();
-			if (created) {
-				synced.push(created);
-			}
+		const record = existing
+			? await tryUpdateSimulator(existing.id, sim, androidId, now)
+			: await tryCreateSimulator(sim, androidId, now);
+
+		if (record) {
+			synced.push(record);
+		}
+
+		if (sim.status === "online") {
+			await setupAdbReverse(sim.adbId);
 		}
 	}
 
-	return synced;
+	if (discoveredAdbIds.length > 0) {
+		await db
+			.delete(simulators)
+			.where(notInArray(simulators.adbId, discoveredAdbIds));
+	} else {
+		await db.delete(simulators);
+	}
+
+	const all = await db.select().from(simulators).all();
+	return all;
 }
 
-export async function launchSimulator(sim: Simulator): Promise<void> {
-	const ldconsole = await getLeiDianConsole();
+export async function isClientRunning(
+	adbId: string,
+	packageName: string
+): Promise<boolean> {
 	const adb = await getAdb();
-
-	if (sim.brand === "leidian" && ldconsole) {
-		try {
-			const listOutput = await $`"${ldconsole}" list`.text();
-			const lines = listOutput.trim().split("\n").filter(Boolean);
-
-			for (const line of lines) {
-				const [index, name] = line.split(",");
-				if (name?.trim() === sim.name || line.includes(sim.adbId)) {
-					await $`"${ldconsole}" launch --index ${index}`.quiet();
-					return;
-				}
-			}
-		} catch {
-			// Fallback to adb
-		}
+	if (!adb) {
+		return false;
 	}
-
 	try {
-		if (adb) {
-			await $`"${adb}" connect ${sim.adbId}`.quiet();
-		}
+		// 优先使用 pidof（Android 7+ 支持）
+		const output =
+			await $`"${adb}" -s ${adbId} shell pidof ${packageName}`.text();
+		return output.trim() !== "";
 	} catch {
-		// Ignore
+		// 兜底：用 ps 过滤
+		try {
+			const output =
+				await $`"${adb}" -s ${adbId} shell ps -A | grep ${packageName}`.text();
+			return output.trim() !== "";
+		} catch {
+			return false;
+		}
 	}
 }
 
-export async function shutdownSimulator(sim: Simulator): Promise<void> {
-	const ldconsole = await getLeiDianConsole();
+export async function scanRunningClients(
+	packageName: string
+): Promise<Map<string, boolean>> {
 	const adb = await getAdb();
+	const result = new Map<string, boolean>();
+	if (!adb) {
+		return result;
+	}
 
-	if (sim.brand === "leidian" && ldconsole) {
-		try {
-			const listOutput = await $`"${ldconsole}" list`.text();
-			const lines = listOutput.trim().split("\n").filter(Boolean);
-
-			for (const line of lines) {
-				const [index, name] = line.split(",");
-				if (name?.trim() === sim.name || line.includes(sim.adbId)) {
-					await $`"${ldconsole}" quit --index ${index}`.quiet();
-					return;
-				}
+	const onlineSims = await db
+		.select({ adbId: simulators.adbId })
+		.from(simulators)
+		.where(eq(simulators.status, "online"))
+		.all();
+	await Promise.all(
+		onlineSims.map(async (sim) => {
+			if (!sim.adbId) {
+				return;
 			}
-		} catch {
-			// Fallback to adb
-		}
-	}
-
-	try {
-		if (adb) {
-			await $`"${adb}" -s ${sim.adbId} shell reboot -p`.quiet();
-		}
-	} catch {
-		// Ignore
-	}
+			const running = await isClientRunning(sim.adbId, packageName);
+			result.set(sim.adbId, running);
+		})
+	);
+	return result;
 }
 
 export async function arrangeWindows(
@@ -402,13 +667,25 @@ async function positionWindow(
 
 	if (sim.brand === "leidian" && ldconsole) {
 		try {
-			const listOutput = await $`"${ldconsole}" list`.text();
+			const listOutput = await getLeiDianListOutput(ldconsole);
 			const lines = listOutput.trim().split("\n").filter(Boolean);
 
 			for (const line of lines) {
-				const [index, name] = line.split(",");
-				if (name?.trim() === sim.name || line.includes(sim.adbId)) {
-					await $`"${ldconsole}" modify --index ${index} --resolution ${w},${h} --dpi 240`.quiet();
+				const parsed = parseLeiDianListLine(line);
+				if (!parsed) {
+					continue;
+				}
+				const { index, name } = parsed;
+				if (name === sim.name || line.includes(sim.adbId)) {
+					await execText(ldconsole, [
+						"modify",
+						"--index",
+						index,
+						"--resolution",
+						`${w},${h}`,
+						"--dpi",
+						"240",
+					]);
 					return;
 				}
 			}

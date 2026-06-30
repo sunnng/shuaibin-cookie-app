@@ -1,3 +1,7 @@
+import { db } from "@shuaibin-cookie-app/db";
+import { simulators } from "@shuaibin-cookie-app/db/schema";
+import { eq, or } from "drizzle-orm";
+
 interface MonitorClient {
 	send: (data: string) => void;
 }
@@ -24,23 +28,59 @@ export interface DeviceSnapshot {
 const connections = new Map<string, DeviceConnection>();
 const monitors = new Set<MonitorClient>();
 const logCache = new Map<string, LogEntry[]>();
+const stableIdToSimulatorId = new Map<string, string>();
 const MAX_LOGS_PER_DEVICE = 500;
 
-export function registerDevice(deviceId: string, client: MonitorClient): void {
-	connections.set(deviceId, {
+async function resolveSimulatorId(deviceId: string): Promise<string> {
+	const cached = stableIdToSimulatorId.get(deviceId);
+	if (cached) {
+		return cached;
+	}
+
+	const rows = await db
+		.select({ id: simulators.id, androidId: simulators.androidId })
+		.from(simulators)
+		.where(or(eq(simulators.id, deviceId), eq(simulators.androidId, deviceId)))
+		.limit(1)
+		.all();
+
+	const found = rows[0];
+	const resolved = found ? found.id : deviceId;
+	stableIdToSimulatorId.set(deviceId, resolved);
+	if (found) {
+		stableIdToSimulatorId.set(found.id, resolved);
+		if (found.androidId) {
+			stableIdToSimulatorId.set(found.androidId, resolved);
+		}
+	}
+	return resolved;
+}
+
+export function getResolvedDeviceId(deviceId: string): string {
+	return stableIdToSimulatorId.get(deviceId) ?? deviceId;
+}
+
+export async function registerDevice(
+	deviceId: string,
+	client: MonitorClient
+): Promise<void> {
+	const resolved = await resolveSimulatorId(deviceId);
+	stableIdToSimulatorId.set(deviceId, resolved);
+
+	connections.set(resolved, {
 		send: client.send,
-		deviceId,
+		deviceId: resolved,
 		registeredAt: Date.now(),
 		lastHeartbeat: Date.now(),
 	});
 
-	if (!logCache.has(deviceId)) {
-		logCache.set(deviceId, []);
+	if (!logCache.has(resolved)) {
+		logCache.set(resolved, []);
 	}
 
 	broadcastToMonitors({
 		type: "device_connected",
-		deviceId,
+		deviceId: resolved,
 		timestamp: Date.now(),
 	});
 }

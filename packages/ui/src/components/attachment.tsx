@@ -33,12 +33,10 @@ function Attachment({
 	VariantProps<typeof attachmentVariants> & {
 		state?: "idle" | "uploading" | "processing" | "error" | "done";
 	}) {
-	const resolvedOrientation = orientation ?? "horizontal";
-
 	return (
 		<div
 			className={cn(attachmentVariants({ size, orientation }), className)}
-			data-orientation={resolvedOrientation}
+			data-orientation={orientation}
 			data-size={size}
 			data-slot="attachment"
 			data-state={state}

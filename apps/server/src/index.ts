@@ -7,16 +7,19 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { createContext } from "@shuaibin-cookie-app/api/context";
 import { appRouter } from "@shuaibin-cookie-app/api/routers/index";
 import { parseApkInfo } from "@shuaibin-cookie-app/api/services/apk-parser";
+import { startScanning } from "@shuaibin-cookie-app/api/services/client-monitor";
 import {
 	addScript,
 	ensureScriptDataDir,
 	getScriptFilePath,
 } from "@shuaibin-cookie-app/api/services/script-store";
+import { updateTaskStatusFromDevice } from "@shuaibin-cookie-app/api/services/task-status";
 import { startWatchdog } from "@shuaibin-cookie-app/api/services/watchdog";
 import {
 	addLog,
 	broadcastToMonitors,
 	findDeviceIdBySend,
+	getResolvedDeviceId,
 	registerDevice,
 	registerMonitor,
 	sendCommand,
@@ -24,10 +27,7 @@ import {
 	unregisterMonitor,
 	updateHeartbeat,
 } from "@shuaibin-cookie-app/api/services/websocket-store";
-import { db } from "@shuaibin-cookie-app/db";
-import { tasks } from "@shuaibin-cookie-app/db/schema";
 import { env } from "@shuaibin-cookie-app/env/server";
-import { eq } from "drizzle-orm";
 import { Elysia } from "elysia";
 
 declare const Bun: typeof import("bun");
@@ -52,51 +52,6 @@ const apiHandler = new OpenAPIHandler(appRouter, {
 	],
 });
 
-async function updateTaskStatus(
-	deviceId: string,
-	update: {
-		status?: string;
-		progress?: number;
-		currentMessage?: string;
-	}
-): Promise<void> {
-	const task = await db
-		.select()
-		.from(tasks)
-		.where(eq(tasks.simulatorId, deviceId))
-		.orderBy(tasks.createdAt)
-		.limit(1)
-		.get();
-
-	if (!task) {
-		return;
-	}
-
-	const set: Partial<typeof tasks.$inferInsert> = {};
-	if (update.status) {
-		set.status = update.status as typeof task.status;
-	}
-	if (update.progress !== undefined) {
-		set.progress = update.progress;
-	}
-	if (update.currentMessage !== undefined) {
-		set.currentMessage = update.currentMessage;
-	}
-
-	if (Object.keys(set).length > 0) {
-		await db.update(tasks).set(set).where(eq(tasks.id, task.id));
-	}
-}
-
-function parseMessage(raw: unknown): Record<string, unknown> | null {
-	const message = typeof raw === "string" ? raw : "";
-	try {
-		return JSON.parse(message) as Record<string, unknown>;
-	} catch {
-		return null;
-	}
-}
-
 async function handleStatusMessage(
 	deviceId: string,
 	data: Record<string, unknown>
@@ -108,8 +63,12 @@ async function handleStatusMessage(
 	const currentMessage =
 		typeof data.message === "string" ? data.message : undefined;
 
+	let updatedTask:
+		| Awaited<ReturnType<typeof updateTaskStatusFromDevice>>
+		| undefined;
+
 	if (status || progress !== undefined || currentMessage) {
-		await updateTaskStatus(deviceId, {
+		updatedTask = await updateTaskStatusFromDevice(deviceId, {
 			status,
 			progress,
 			currentMessage,
@@ -119,11 +78,21 @@ async function handleStatusMessage(
 	broadcastToMonitors({
 		type: "status",
 		deviceId,
+		taskId: updatedTask?.id,
 		progress,
 		status,
 		message: currentMessage,
 		timestamp: Date.now(),
 	});
+}
+
+function parseMessage(raw: unknown): Record<string, unknown> | null {
+	const message = typeof raw === "string" ? raw : "";
+	try {
+		return JSON.parse(message) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
 }
 
 function handleLogMessage(
@@ -151,10 +120,10 @@ function handleLogMessage(
 	});
 }
 
-function handleScriptMessage(
+async function handleScriptMessage(
 	ws: { send: (data: string) => void },
 	raw: unknown
-): void {
+): Promise<void> {
 	const data = parseMessage(raw);
 	if (!data) {
 		return;
@@ -166,13 +135,13 @@ function handleScriptMessage(
 	}
 
 	if (data.type === "register") {
-		registerDevice(deviceId, ws);
+		await registerDevice(deviceId, ws);
 	} else if (data.type === "heartbeat") {
-		updateHeartbeat(deviceId);
+		updateHeartbeat(getResolvedDeviceId(deviceId));
 	} else if (data.type === "status") {
-		handleStatusMessage(deviceId, data);
+		await handleStatusMessage(getResolvedDeviceId(deviceId), data);
 	} else if (data.type === "log") {
-		handleLogMessage(deviceId, data);
+		handleLogMessage(getResolvedDeviceId(deviceId), data);
 	}
 }
 
@@ -265,7 +234,9 @@ new Elysia()
 			console.log("[ws/script] connected:", _ws.id);
 		},
 		message(ws, raw) {
-			handleScriptMessage(ws, raw);
+			handleScriptMessage(ws, raw).catch((error) => {
+				console.error("[ws/script] message handler error:", error);
+			});
 		},
 		close(ws) {
 			const deviceId = findDeviceIdBySend(ws.send);
@@ -285,7 +256,8 @@ new Elysia()
 			handleMonitorMessage(raw);
 		},
 	})
-	.listen(3000, () => {
-		console.log("Server is running on http://localhost:3000");
+	.listen(env.SERVER_PORT, () => {
+		console.log(`Server is running on http://localhost:${env.SERVER_PORT}`);
 		startWatchdog();
+		startScanning("com.sun.cookierunkingdom", 10_000);
 	});

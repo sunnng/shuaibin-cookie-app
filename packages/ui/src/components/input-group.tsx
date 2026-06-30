@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "@shuaibin-cookie-app/ui/components/button";
 import { Input } from "@shuaibin-cookie-app/ui/components/input";
 import { Textarea } from "@shuaibin-cookie-app/ui/components/textarea";
@@ -5,16 +7,14 @@ import { cn } from "@shuaibin-cookie-app/ui/lib/utils";
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
-function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
+function InputGroup({ className, ...props }: React.ComponentProps<"fieldset">) {
 	return (
-		// biome-ignore lint/a11y/useSemanticElements: generic input group wrapper
-		<div
+		<fieldset
 			className={cn(
-				"group/input-group relative flex h-8 w-full min-w-0 items-center rounded-none border border-input outline-none transition-colors in-data-[slot=combobox-content]:focus-within:border-inherit in-data-[slot=combobox-content]:focus-within:ring-0 has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-start]]:h-auto has-[>textarea]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-start]]:flex-col has-[[data-slot=input-group-control]:focus-visible]:border-ring has-[[data-slot][aria-invalid=true]]:border-destructive has-disabled:bg-input/50 has-disabled:opacity-50 has-[[data-slot=input-group-control]:focus-visible]:ring-1 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/50 has-[[data-slot][aria-invalid=true]]:ring-1 has-[[data-slot][aria-invalid=true]]:ring-destructive/20 dark:bg-input/30 dark:has-disabled:bg-input/80 dark:has-[[data-slot][aria-invalid=true]]:ring-destructive/40 has-[>[data-align=block-end]]:[&>input]:pt-3 has-[>[data-align=inline-end]]:[&>input]:pr-1.5 has-[>[data-align=block-start]]:[&>input]:pb-3 has-[>[data-align=inline-start]]:[&>input]:pl-1.5",
+				"group/input-group relative flex h-8 w-full min-w-0 items-center rounded-none border border-input p-0 outline-none transition-colors in-data-[slot=combobox-content]:focus-within:border-inherit in-data-[slot=combobox-content]:focus-within:ring-0 has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-start]]:h-auto has-[>textarea]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-start]]:flex-col has-[[data-slot=input-group-control]:focus-visible]:border-ring has-[[data-slot][aria-invalid=true]]:border-destructive has-disabled:bg-input/50 has-disabled:opacity-50 has-[[data-slot=input-group-control]:focus-visible]:ring-1 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/50 has-[[data-slot][aria-invalid=true]]:ring-1 has-[[data-slot][aria-invalid=true]]:ring-destructive/20 dark:bg-input/30 dark:has-disabled:bg-input/80 dark:has-[[data-slot][aria-invalid=true]]:ring-destructive/40 has-[>[data-align=block-end]]:[&>input]:pt-3 has-[>[data-align=inline-end]]:[&>input]:pr-1.5 has-[>[data-align=block-start]]:[&>input]:pb-3 has-[>[data-align=inline-start]]:[&>input]:pl-1.5",
 				className
 			)}
 			data-slot="input-group"
-			role="group"
 			{...props}
 		/>
 	);
@@ -47,20 +47,10 @@ function InputGroupAddon({
 	...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
 	return (
-		// biome-ignore lint/a11y/useKeyWithClickEvents: delegates focus to input
-		// biome-ignore lint/a11y/noNoninteractiveElementInteractions: delegates focus to input
-		// biome-ignore lint/a11y/useSemanticElements: generic input group wrapper
 		<div
 			className={cn(inputGroupAddonVariants({ align }), className)}
 			data-align={align}
 			data-slot="input-group-addon"
-			onClick={(e) => {
-				if ((e.target as HTMLElement).closest("button")) {
-					return;
-				}
-				e.currentTarget.parentElement?.querySelector("input")?.focus();
-			}}
-			role="group"
 			{...props}
 		/>
 	);

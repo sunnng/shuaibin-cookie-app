@@ -14,10 +14,12 @@ export interface DeviceSnapshot {
 }
 
 export interface WebSocketState {
+	clientStatusChangedAt: number | null;
 	connected: boolean;
 	devices: DeviceSnapshot[];
 	logs: Record<string, LogEntry[]>;
 	sendCommand: (deviceId: string, command: string, payload?: unknown) => void;
+	taskStatusChangedAt: number | null;
 }
 
 function handleSnapshot(
@@ -73,7 +75,9 @@ function handleLogMessage(
 function handleMessage(
 	event: MessageEvent,
 	setDevices: React.Dispatch<React.SetStateAction<DeviceSnapshot[]>>,
-	setLogs: React.Dispatch<React.SetStateAction<Record<string, LogEntry[]>>>
+	setLogs: React.Dispatch<React.SetStateAction<Record<string, LogEntry[]>>>,
+	setClientStatusChangedAt: React.Dispatch<React.SetStateAction<number | null>>,
+	setTaskStatusChangedAt: React.Dispatch<React.SetStateAction<number | null>>
 ): void {
 	const data = JSON.parse(event.data as string) as Record<string, unknown>;
 
@@ -89,6 +93,16 @@ function handleMessage(
 
 	if (data.type === "log") {
 		handleLogMessage(data, setLogs);
+		return;
+	}
+
+	if (data.type === "status") {
+		setTaskStatusChangedAt(Date.now());
+		return;
+	}
+
+	if (data.type === "client_status_changed") {
+		setClientStatusChangedAt(Date.now());
 	}
 }
 
@@ -96,6 +110,12 @@ export function useMonitorWebSocket(): WebSocketState {
 	const [connected, setConnected] = useState(false);
 	const [devices, setDevices] = useState<DeviceSnapshot[]>([]);
 	const [logs, setLogs] = useState<Record<string, LogEntry[]>>({});
+	const [clientStatusChangedAt, setClientStatusChangedAt] = useState<
+		number | null
+	>(null);
+	const [taskStatusChangedAt, setTaskStatusChangedAt] = useState<number | null>(
+		null
+	);
 	const wsRef = useRef<WebSocket | null>(null);
 
 	useEffect(() => {
@@ -106,7 +126,14 @@ export function useMonitorWebSocket(): WebSocketState {
 
 		ws.onopen = () => setConnected(true);
 		ws.onclose = () => setConnected(false);
-		ws.onmessage = (event) => handleMessage(event, setDevices, setLogs);
+		ws.onmessage = (event) =>
+			handleMessage(
+				event,
+				setDevices,
+				setLogs,
+				setClientStatusChangedAt,
+				setTaskStatusChangedAt
+			);
 
 		return () => {
 			ws.close();
@@ -123,5 +150,12 @@ export function useMonitorWebSocket(): WebSocketState {
 		);
 	};
 
-	return { connected, devices, logs, sendCommand };
+	return {
+		connected,
+		devices,
+		logs,
+		clientStatusChangedAt,
+		taskStatusChangedAt,
+		sendCommand,
+	};
 }

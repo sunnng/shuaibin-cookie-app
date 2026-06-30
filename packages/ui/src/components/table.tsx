@@ -1,5 +1,3 @@
-"use client";
-
 import { cn } from "@shuaibin-cookie-app/ui/lib/utils";
 import type * as React from "react";
 

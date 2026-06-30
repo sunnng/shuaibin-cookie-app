@@ -8,6 +8,7 @@ export const simulators = sqliteTable("simulators", {
 		.default("adb"),
 	adbId: text("adb_id").notNull(),
 	adbPort: integer("adb_port"),
+	androidId: text("android_id").unique(),
 	status: text("status", { enum: ["offline", "online", "busy"] })
 		.notNull()
 		.default("offline"),
