@@ -40,9 +40,7 @@ export async function installAndStart(task: Task): Promise<void> {
 	}
 
 	const mainActivity = script.mainActivity || ".MainActivity";
-	const componentName = mainActivity.startsWith(".")
-		? `${task.scriptPackage}${mainActivity}`
-		: mainActivity;
+	const componentName = `${task.scriptPackage}/${mainActivity}`;
 
 	const wsHost = process.env.SERVER_HOST || "localhost";
 	const wsAddress = `ws://${wsHost}:3000/ws/script`;
