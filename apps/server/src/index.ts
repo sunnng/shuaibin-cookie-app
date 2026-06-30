@@ -239,7 +239,14 @@ new Elysia()
 		const filePath = getScriptFilePath(id);
 		await Bun.write(filePath, file);
 
-		const info = await parseApkInfo(filePath);
+		let info: Awaited<ReturnType<typeof parseApkInfo>>;
+		try {
+			info = await parseApkInfo(filePath);
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Failed to parse APK";
+			return new Response(message, { status: 400 });
+		}
 
 		const meta = await addScript({
 			id,
